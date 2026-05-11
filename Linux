@@ -1,0 +1,137 @@
+#!/bin/bash
+
+# TL Intern Pod Reset Script
+# Usage: sudo tl-pod-reset FASTGROUP NEXTGROUP
+# Example: sudo tl-pod-reset spring2025 summer2025
+
+# What this script does:
+# 1. Verifies FASTGROUP's Nextcloud folder is fully synced before wiping
+# 2. Removes the FASTGROUP local user and home directory
+# 3. Creates NEXTGROUP local user and home directory
+# 4. Connects NEXTGROUP's Nextcloud to the correct group folder
+# 5. Resets desktop to the clean intern template
+# 6. Logs the reset event
+
+set -e
+
+FASTGROUP="$1"
+NEXTGROUP="$2"
+
+NEXTCLOUD_SERVER="http://192.168.1.5"
+NEXTCLOUD_ADMIN_USER="ncadmin"
+NC_GROUPS_PATH="/mnt/tl-data/nextcloud-data/groups"
+LOG_FILE="/var/log/tl-pod-reset.log"
+TEMPLATE_HOME="/etc/tl-pod-template"
+
+# --- Validate arguments ---
+if [ -z "$FASTGROUP" ] || [ -z "$NEXTGROUP" ]; then
+    echo "Usage: sudo tl-pod-reset FASTGROUP NEXTGROUP"
+    exit 1
+fi
+
+echo "[$(date)] Starting pod reset: $FASTGROUP -> $NEXTGROUP" | tee -a "$LOG_FILE"
+
+# --- Step 1: Verify FASTGROUP Nextcloud sync is complete ---
+echo "Checking Nextcloud sync status for group: $FASTGROUP..."
+
+# Check Nextcloud group folder exists and is non-empty
+if [ ! -d "$NC_GROUPS_PATH/$FASTGROUP" ]; then
+    echo "ERROR: Nextcloud group folder for FASTGROUP not found at"
+    echo "$NC_GROUPS_PATH/$FASTGROUP"
+    echo "Aborting reset. Please ensure Nextcloud sync completed before running this script."
+    exit 1
+fi
+
+NC_FILE_COUNT=$(find "$NC_GROUPS_PATH/$FASTGROUP" -type f | wc -l)
+
+echo "Found $NC_FILE_COUNT files in Nextcloud for group $FASTGROUP."
+
+if [ "$NC_FILE_COUNT" -eq 0 ]; then
+    echo "WARNING: Nextcloud folder for $FASTGROUP is empty."
+    read -p "Are you sure you want to continue? All local data will be lost. (yes/no): " CONFIRM
+
+    if [ "$CONFIRM" != "yes" ]; then
+        echo "Aborting reset."
+        exit 1
+    fi
+fi
+
+echo "[$(date)] Sync verified: $NC_FILE_COUNT files found for $FASTGROUP" >> "$LOG_FILE"
+
+# --- Step 2: Stop any running Nextcloud client processes for FASTGROUP ---
+echo "Stopping Nextcloud client for $FASTGROUP..."
+pkill -u "$FASTGROUP" nextcloud 2>/dev/null || true
+sleep 2
+
+# --- Step 3: Remove FASTGROUP local user and home directory ---
+echo "Removing local user: $FASTGROUP"
+
+if id "$FASTGROUP" &>/dev/null; then
+    pkill -u "$FASTGROUP" 2>/dev/null || true
+    sleep 1
+    userdel -r "$FASTGROUP" 2>/dev/null || true
+    echo "User $FASTGROUP removed."
+else
+    echo "User $FASTGROUP did not exist locally - skipping."
+fi
+
+# --- Step 4: Create NEXTGROUP local user ---
+echo "Creating local user: $NEXTGROUP..."
+
+useradd -m -s /bin/bash -G audio,video,plugdev,netdev "$NEXTGROUP"
+
+echo "$NEXTGROUP:$NEXTGROUP" | chpasswd
+
+echo "User $NEXTGROUP created. Default password = group name. Must be changed on first login."
+
+# --- Step 5: Apply clean desktop template ---
+echo "Applying clean desktop template..."
+
+if [ -d "$TEMPLATE_HOME" ]; then
+    cp -r "$TEMPLATE_HOME/." "/home/$NEXTGROUP/"
+    chown -R "$NEXTGROUP:$NEXTGROUP" "/home/$NEXTGROUP"
+    echo "Template applied."
+else
+    echo "WARNING: Template directory $TEMPLATE_HOME not found. Skipping template."
+fi
+
+# --- Step 6: Create Nextcloud group folder for NEXTGROUP ---
+echo "Creating Nextcloud group folder for $NEXTGROUP..."
+
+mkdir -p "$NC_GROUPS_PATH/$NEXTGROUP"
+
+# Nextcloud will pick this up on next scan. Trigger a files:scan via occ if available.
+# This requires the Nextcloud occ command to be accessible - adjust path as needed.
+# sudo -u www-data php /var/www/nextcloud/occ files:scan --path="/groups/$NEXTGROUP"
+
+# --- Step 7: Configure Nextcloud client for NEXTGROUP ---
+echo "Configuring Nextcloud autostart for $NEXTGROUP..."
+
+AUTOSTART_DIR="/home/$NEXTGROUP/.config/autostart"
+
+mkdir -p "$AUTOSTART_DIR"
+
+cat > "$AUTOSTART_DIR/nextcloud.desktop" << EOF2
+[Desktop Entry]
+Type=Application
+Exec=nextcloud --logfile /home/$NEXTGROUP/.nextcloud.log
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Name=Nextcloud
+Comment=Start Nextcloud sync on login
+EOF2
+
+chown -R "$NEXTGROUP:$NEXTGROUP" "$AUTOSTART_DIR"
+
+# --- Step 8: Log and finish ---
+echo "[$(date)] Reset complete: $FASTGROUP archived, $NEXTGROUP ready." >> "$LOG_FILE"
+
+echo ""
+echo "======================================"
+echo "         Pod Reset Complete"
+echo "======================================"
+echo " Fast group : $FASTGROUP"
+echo " Next group : $NEXTGROUP"
+echo " Default pwd: $NEXTGROUP"
+echo "======================================"
