@@ -1,0 +1,111 @@
+#!/bin/bash
+
+#
+# USB-triggered backup + reset system
+# Ubuntu/Linux
+#
+
+set -e
+
+########################################
+# CONFIG
+########################################
+
+USER_NAME=$(logname)
+USER_HOME="/home/$USER_NAME"
+
+TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+BACKUP_NAME="${USER_NAME}_${TIMESTAMP}"
+
+# Detect mounted USB automatically
+USB_MOUNT=$(lsblk -o MOUNTPOINT,TRAN | grep usb | awk '{print $1}' | head -n 1)
+
+# Destination folder on USB
+DEST="$USB_MOUNT/$BACKUP_NAME"
+
+########################################
+# CHECK USB
+########################################
+
+if [ -z "$USB_MOUNT" ]; then
+    echo "No USB device detected."
+    exit 1
+fi
+
+mkdir -p "$DEST"
+
+echo "USB detected at: $USB_MOUNT"
+echo "Backup folder: $DEST"
+
+########################################
+# COPY USER FILES
+########################################
+
+echo "Copying files..."
+
+rsync -a \
+    --exclude=".cache" \
+    --exclude=".local/share/Trash" \
+    --exclude="node_modules" \
+    --exclude=".gvfs" \
+    --exclude="Downloads/*.tmp" \
+    "$USER_HOME/" \
+    "$DEST/"
+
+echo "Copy complete."
+
+########################################
+# FORCE WRITE TO USB
+########################################
+
+echo "Flushing filesystem buffers..."
+
+sync
+udevadm settle
+
+########################################
+# UNMOUNT USB CLEANLY
+########################################
+
+echo "Unmounting USB..."
+
+umount "$USB_MOUNT"
+
+########################################
+# RESET USER DIRECTORY
+########################################
+
+echo "Resetting user files..."
+
+find "$USER_HOME" -mindepth 1 -maxdepth 1 \
+    ! -name ".bashrc" \
+    ! -name ".profile" \
+    ! -name ".bash_logout" \
+    -exec rm -rf {} +
+
+########################################
+# FINAL SYNC
+########################################
+
+sync
+
+########################################
+# DELETE
+########################################
+
+rm -rf /home/$USER_NAME/Desktop/*
+rm -rf /home/$USER_NAME/Documents/*
+rm -rf /home/$USER_NAME/Downloads/*
+rm -rf /home/$USER_NAME/Pictures/*
+rm -rf /home/$USER_NAME/Videos/*
+rm -rf /home/$USER_NAME/Music/*
+
+########################################
+# REBOOT
+########################################
+
+echo "Rebooting system in 5 seconds..."
+
+sleep 5
+
+reboot
