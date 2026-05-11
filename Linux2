@@ -5,7 +5,7 @@
 # Ubuntu/Linux
 #
 
-set -e
+set +e
 
 ########################################
 # CONFIG
@@ -17,8 +17,8 @@ USER_HOME="/home/$USER_NAME"
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 BACKUP_NAME="${USER_NAME}_${TIMESTAMP}"
 
-# Detect mounted USB automatically
-USB_MOUNT=$(lsblk -o MOUNTPOINT,TRAN | grep usb | awk '{print $1}' | head -n 1)
+# USB device
+USB_MOUNT=$(findmnt -rn -S /dev/sdb1 -o TARGET)
 
 # Destination folder on USB
 DEST="$USB_MOUNT/$BACKUP_NAME"
@@ -43,14 +43,21 @@ echo "Backup folder: $DEST"
 
 echo "Copying files..."
 
-rsync -a \
+rsync -a --progress \
     --exclude=".cache" \
     --exclude=".local/share/Trash" \
+    --exclude=".local/state" \
     --exclude="node_modules" \
     --exclude=".gvfs" \
     --exclude="Downloads/*.tmp" \
+    --exclude="Singleton*" \
+    --exclude="*.lock" \
+    --exclude="*.sock" \
+    --exclude=".config/google-chrome/*" \
+    --exclude=".config/BraveSoftware/*" \
+    --exclude="snap" \
     "$USER_HOME/" \
-    "$DEST/"
+    "$DEST/" || true
 
 echo "Copy complete."
 
@@ -72,33 +79,23 @@ echo "Unmounting USB..."
 umount "$USB_MOUNT"
 
 ########################################
-# RESET USER DIRECTORY
+# DELETE USER FILES
 ########################################
 
-echo "Resetting user files..."
+echo "Deleting user files..."
 
-find "$USER_HOME" -mindepth 1 -maxdepth 1 \
-    ! -name ".bashrc" \
-    ! -name ".profile" \
-    ! -name ".bash_logout" \
-    -exec rm -rf {} +
+rm -rf "$USER_HOME/Desktop/"*
+rm -rf "$USER_HOME/Documents/"*
+rm -rf "$USER_HOME/Downloads/"*
+rm -rf "$USER_HOME/Pictures/"*
+rm -rf "$USER_HOME/Videos/"*
+rm -rf "$USER_HOME/Music/"*
 
 ########################################
 # FINAL SYNC
 ########################################
 
 sync
-
-########################################
-# DELETE
-########################################
-
-rm -rf /home/$USER_NAME/Desktop/*
-rm -rf /home/$USER_NAME/Documents/*
-rm -rf /home/$USER_NAME/Downloads/*
-rm -rf /home/$USER_NAME/Pictures/*
-rm -rf /home/$USER_NAME/Videos/*
-rm -rf /home/$USER_NAME/Music/*
 
 ########################################
 # REBOOT
@@ -108,4 +105,4 @@ echo "Rebooting system in 5 seconds..."
 
 sleep 5
 
-reboot
+systemctl reboot -i
